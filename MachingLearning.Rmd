@@ -1,0 +1,100 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Jennifer Roberts"
+date: "5/9/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##Project Goal
+This project examines a dataset of accelerometer measurements collected from the belt, forearm, arm, and dumbell of 6 individuals as they performed bicep curls in 5 ways, one correct and 4 incorrect. The goal of this project is to use this data to construct a model for judging in which of these 5 manners a bicep curl was performed.
+
+##Loading and Cleaning the Data
+The dataset is available at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv. It consists of 19622 observations, each containing 160 variables. A large number of these variables are empty or contain invalid data (NA, etc.). The first step is to load the raw data and then remove the empty data values.
+```{r Prep Data}
+pml_training <- read.csv("~/Desktop/Coursera Data Science/pml-training.csv", header = TRUE, na.strings = c("NA", "", "#DIV/0!"))
+keep <- function(x) if (sum(is.na(x)) == 0) {TRUE} else {FALSE}
+keepColumn <- apply(pml_training, 2, keep)
+pml_training2 <- pml_training[,keepColumn]
+```
+Additionally, the first five columns contain an identity column, the name of the participant, and timestamp information. Removing them ensures that the model produced is more generally applicable.
+```{r Prep Data 2}
+pml_training2 <- pml_training2[,-(1:5)]
+```
+Finally, the training dataset is divided into training and testing (validation) sets.
+```{r Partition Data}
+set.seed(5072017)
+library(caret)
+trainingSet <- createDataPartition(pml_training2$classe, p=0.75, list=FALSE)
+training1 <- pml_training2[trainingSet,]
+testing1 <- pml_training2[-trainingSet,]
+```
+##Preprosessing the Data
+Ideally, selection of variables and preprocessing is informed by a knowledge the field generally and the specific data. Not having that knowledge, I decided to use principal component analysis to condense the set of variables used in the model.
+```{r Preprocess data}
+pp1 <- preProcess(training1, method = c("pca"))
+trainingPC1 <- predict(pp1,training1)
+testingPC1 <- predict(pp1, testing1)
+```
+Preprocessing with PCA resulted in a dataset with 27 variables: 25 PCA variables, the result variable 'classe' and an additional factor variable, new_window. Looking at the relationship between new_window and classe in the training dataset shows no significant relationship.
+```{r Preprocess Data2}
+table(trainingPC1$new_window, trainingPC1$classe)
+```
+The new_windows variable can, therefore, be removed.
+```{r Preprocess Data 3}
+trainingPC1 <- trainingPC1[,-1]
+testingPC1 <- testingPC1[,-1]
+```
+##Building Models
+###Configuring parallel processing and cross validation
+Now that the data has be prepared, the next step is to create a prediction model. I will build several models, using different modeling techniques, and compare their accuracy. Before beginning, I configure parallel processing and create a trainControl to allow parallel processing and configure k-fold cross validation with 10 folds.
+```{r setup the for parallel processing}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() -1)
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+```
+###Tree Model
+I will start with a simple tree model, which runs quickly, but does not produce very accurate results.
+```{r Modeling with tree}
+modelTree <- train(classe ~ ., method="rpart", data=trainingPC1, trControl=fitControl)
+cmTree <- confusionMatrix(testingPC1$classe, predict(modelTree, testingPC1))
+cmTree$table
+cmTree$overall['Accuracy']
+```
+###Quadratic Descriminant Analysis Model
+Another model that can be effective for modeling non-linear outcomes is quadratic discriminant analysis. This method provides much better accuracy over the tree model.
+```{r Modeling with qda}
+modelQDA <- train(classe ~., method="qda", data=trainingPC1, trControl=fitControl)
+cmQDA <- confusionMatrix(testingPC1$classe, predict(modelQDA, testingPC1))
+cmQDA$table
+cmQDA$overall['Accuracy']
+```
+###Random Forest Model
+Random Forest models are often very accurate, although the require significant processing time. 
+```{r Modeling Random Forest}
+modelRandomForest <- train(classe ~ .,method="rf",data=trainingPC1, trControl=fitControl)
+cmRandomForest <- confusionMatrix(testing1$classe, predict(modelRandomForest, testingPC1))
+cmRandomForest$table
+cmRandomForest$overall['Accuracy']
+```
+###Boosting Model
+Finally, another model the can produce highly accurate results at the cost of high processing times is Boosting. For this scenario gradient boosting was used and produces an accurate model, 
+```{r message = FALSE}
+modelBoost <- train(classe ~., method="gbm", data=trainingPC1, trControl=fitControl)
+cmBoost <- confusionMatrix(testingPC1$classe, predict(modelBoost, testingPC1))
+```
+```{r Modeling with boosting 2}
+cmBoost$table
+cmBoost$overall['Accuracy']
+```
+##Conclusion
+Comparing these four models, the random forest model results in the greatest accuracy. With an accuracy of 98% when measured against our validation set, it produces an expected out-of-sample error of 2%.
+
+```{r shutdown the cluster}
+stopCluster(cluster)
+registerDoSEQ()
+```
